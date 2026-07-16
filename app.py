@@ -1,14 +1,21 @@
+import os
+import gdown
 import gradio as gr
 from ultralytics import YOLO
 import cv2
 import numpy as np
 import pandas as pd
 import tempfile
-import os
 
 # Load model
-model = YOLO("model/best.pt")
 
+MODEL_PATH = "best.pt"
+if not os.path.exists(MODEL_PATH):
+    print("Downloading model...")
+    url = "https://drive.google.com/uc?id=1iicpPO9D7AvBzRxZUjnvKj2f9USQ9uFe"
+    gdown.download(url, MODEL_PATH, quiet=False)
+
+model = YOLO(MODEL_PATH)
 
 def draw_and_collect(frame, results, frame_idx=0):
     annotated = frame.copy()
@@ -116,4 +123,4 @@ with gr.Blocks(title="Number Plate Detection") as demo:
             outputs=[out_vid, table_vid]
         )
 
-demo.launch()
+demo.launch(server_name="0.0.0.0", server_port=7860)
