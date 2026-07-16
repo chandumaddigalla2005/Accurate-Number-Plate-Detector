@@ -1,7 +1,9 @@
-gradio
+streamlit
 ultralytics
 opencv-python-headless
 numpy
 pandas
-Pillow
+torch
+torchvision
+pillow
 gdown
