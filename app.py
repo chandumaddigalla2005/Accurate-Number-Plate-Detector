@@ -1,126 +1,156 @@
 import os
-import gdown
-import gradio as gr
-from ultralytics import YOLO
+import tempfile
 import cv2
+import gdown
 import numpy as np
 import pandas as pd
-import tempfile
+import streamlit as st
+from ultralytics import YOLO
 
-# Load model
+# -------------------- Page --------------------
+st.set_page_config(page_title="Number Plate Detection", layout="wide")
+st.title("🚗 Number Plate Detection")
 
+# -------------------- Download Model --------------------
 MODEL_PATH = "best.pt"
+
 if not os.path.exists(MODEL_PATH):
-    print("Downloading model...")
-    url = "https://drive.google.com/uc?id=1iicpPO9D7AvBzRxZUjnvKj2f9USQ9uFe"
-    gdown.download(url, MODEL_PATH, quiet=False)
+    FILE_ID = "1iicpPO9D7AvBzRxZUjnvKj2f9USQ9uFe"
+
+    with st.spinner("Downloading model..."):
+        gdown.download(id=FILE_ID, output=MODEL_PATH, quiet=False)
 
 model = YOLO(MODEL_PATH)
 
-def draw_and_collect(frame, results, frame_idx=0):
-    annotated = frame.copy()
+# -------------------- Detection --------------------
+def detect(frame):
+
+    results = model.predict(frame, verbose=False)
+
     rows = []
 
     if results[0].boxes is not None:
-        boxes = results[0].boxes.xyxy
-        confs = results[0].boxes.conf
 
-        for i, box in enumerate(boxes):
+        boxes = results[0].boxes.xyxy.cpu().numpy()
+        confs = results[0].boxes.conf.cpu().numpy()
+
+        for box, conf in zip(boxes, confs):
+
             x1, y1, x2, y2 = map(int, box)
-            conf = float(confs[i]) if confs is not None else 0.0
 
-            # Draw bounding box
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            label = f"Plate | {conf:.2f}"
-            cv2.putText(annotated, label, (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2),
+                          (0,255,0),2)
 
-            # Only keep minimal info
+            cv2.putText(frame,
+                        f"Plate {conf:.2f}",
+                        (x1,y1-10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0,255,255),
+                        2)
+
             rows.append({
-                "frame": frame_idx,
-                "confidence": round(conf, 4)
+                "confidence": round(float(conf),4)
             })
 
-    return annotated, rows
+    return frame, pd.DataFrame(rows)
 
+# -------------------- Sidebar --------------------
+option = st.sidebar.selectbox(
+    "Choose Input",
+    ["Image","Video"]
+)
 
-def process_image(image):
-    frame = np.array(image)
-    results = model(frame)
+# -------------------- IMAGE --------------------
+if option=="Image":
 
-    annotated, rows = draw_and_collect(frame, results, frame_idx=0)
-    df = pd.DataFrame(rows)
+    uploaded = st.file_uploader(
+        "Upload Image",
+        type=["jpg","jpeg","png"]
+    )
 
-    return annotated, df
+    if uploaded:
 
-
-def process_video(video):
-    cap = cv2.VideoCapture(video)
-    if not cap.isOpened():
-        return None, None
-
-    out_path = os.path.join(tempfile.gettempdir(), "output.mp4")
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps == 0 or np.isnan(fps):
-        fps = 20.0
-
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    out = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
-
-    all_rows = []
-    frame_idx = 0
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        results = model(frame)
-        annotated, rows = draw_and_collect(frame, results, frame_idx)
-
-        out.write(annotated)
-        all_rows.extend(rows)
-        frame_idx += 1
-
-    cap.release()
-    out.release()
-
-    df = pd.DataFrame(all_rows)
-
-    return out_path, df
-
-
-with gr.Blocks(title="Number Plate Detection") as demo:
-
-    gr.Markdown("## 🚗 Number Plate Detection System")
-    gr.Markdown("Upload an image or video to detect number plates.")
-
-    with gr.Tab("Image"):
-        inp_img = gr.Image(type="pil", label="Upload Image / Use Camera")
-        btn_img = gr.Button("Run Detection")
-        out_img = gr.Image(label="Annotated Output")
-        table_img = gr.Dataframe(label="Detections")
-
-        btn_img.click(
-            fn=process_image,
-            inputs=inp_img,
-            outputs=[out_img, table_img]
+        file_bytes = np.asarray(
+            bytearray(uploaded.read()),
+            dtype=np.uint8
         )
 
-    with gr.Tab("Video"):
-        inp_vid = gr.Video(label="Upload Video")
-        btn_vid = gr.Button("Run Detection")
-        out_vid = gr.Video(label="Annotated Video")
-        table_vid = gr.Dataframe(label="Detections")
+        image = cv2.imdecode(file_bytes,1)
 
-        btn_vid.click(
-            fn=process_video,
-            inputs=inp_vid,
-            outputs=[out_vid, table_vid]
+        if st.button("Run Detection"):
+
+            out, df = detect(image)
+
+            st.image(
+                cv2.cvtColor(out,cv2.COLOR_BGR2RGB),
+                use_container_width=True
+            )
+
+            st.dataframe(df)
+
+# -------------------- VIDEO --------------------
+else:
+
+    uploaded = st.file_uploader(
+        "Upload Video",
+        type=["mp4","avi","mov"]
+    )
+
+    if uploaded:
+
+        temp_input = tempfile.NamedTemporaryFile(delete=False,suffix=".mp4")
+        temp_input.write(uploaded.read())
+        temp_input.close()
+
+        cap = cv2.VideoCapture(temp_input.name)
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+
+        if fps == 0:
+            fps = 20
+
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        output_path = "output.mp4"
+
+        out = cv2.VideoWriter(
+            output_path,
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            fps,
+            (width,height)
         )
 
-demo.launch(server_name="0.0.0.0", server_port=7860)
+        data=[]
+
+        progress = st.progress(0)
+
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        count=0
+
+        while True:
+
+            ret,frame = cap.read()
+
+            if not ret:
+                break
+
+            frame,df = detect(frame)
+
+            out.write(frame)
+
+            data.extend(df.to_dict("records"))
+
+            count+=1
+
+            progress.progress(min(count/total,1.0))
+
+        cap.release()
+        out.release()
+
+        st.success("Completed")
+
+        st.video(output_path)
+
+        st.dataframe(pd.DataFrame(data))
